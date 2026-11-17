@@ -26,6 +26,25 @@ require_cmd() {
   for c in "$@"; do command -v "$c" >/dev/null 2>&1 || die "required command not found: $c"; done
 }
 
+# php and composer through Docker when they are not installed on the machine.
+# The dev folder and the workspace are mounted at the same path, so the scripts
+# can pass absolute paths. Images can be changed with the variables below.
+AUSTRAL_PHP_IMAGE="${AUSTRAL_PHP_IMAGE:-australproject/php:8.4}"
+AUSTRAL_COMPOSER_IMAGE="${AUSTRAL_COMPOSER_IMAGE:-composer:2}"
+docker_tool() { # docker_tool <image> <command> [args...]
+  local image="$1" cmd="$2"; shift 2
+  local mounts=(-v "$DEV_ROOT:$DEV_ROOT")
+  case "$WORKSPACE/" in "$DEV_ROOT"/*) ;; *) mounts+=(-v "$WORKSPACE:$WORKSPACE") ;; esac
+  docker run --rm -i -u "$(id -u):$(id -g)" -e HOME=/tmp -e COMPOSER_HOME=/tmp/composer \
+    "${mounts[@]}" -w "$PWD" --entrypoint "$cmd" "$image" "$@"
+}
+if ! command -v php >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
+  php() { docker_tool "$AUSTRAL_PHP_IMAGE" php "$@"; }
+fi
+if ! command -v composer >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
+  composer() { docker_tool "$AUSTRAL_COMPOSER_IMAGE" composer "$@"; }
+fi
+
 # Lists "<repository> <type>" from bundles.txt (comments and empty lines are ignored)
 all_repos() {
   sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$BUNDLES_FILE" | awk 'NF>=2 {print $1" "$2}'

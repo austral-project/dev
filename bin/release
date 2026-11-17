@@ -49,6 +49,8 @@ fi
 has_gh=0; command -v gh >/dev/null 2>&1 && has_gh=1
 has_php=0; command -v php >/dev/null 2>&1 && has_php=1
 has_composer=0; command -v composer >/dev/null 2>&1 && has_composer=1
+[ "$has_php" -eq 1 ] || warn "php not found (nor docker): the composer.json constraints will NOT be checked"
+[ "$has_composer" -eq 1 ] || warn "composer not found (nor docker): composer validate will NOT be run"
 [ "$SKIP_CI" -eq 1 ] || [ "$has_gh" -eq 1 ] || die "gh is required to check the CI (or use --skip-ci)"
 
 MODE="DRY RUN"; [ "$EXECUTE" -eq 1 ] && MODE="RELEASE"

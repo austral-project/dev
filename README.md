@@ -4,7 +4,7 @@ The maintainer's working repository: it **contains no Austral code**. It is used
 
 ## Requirements
 
-`git`, `gh` (logged in: `gh auth login`), `php` 8.2+, `composer`, `perl`.
+`git`, `gh` (logged in: `gh auth login`), `perl`, and `php` 8.2+ / `composer`. Without a local PHP, the scripts run them through Docker (`australproject/php:8.4` and `composer:2`, to change with `AUSTRAL_PHP_IMAGE` / `AUSTRAL_COMPOSER_IMAGE`).
 
 ## Commands
 
