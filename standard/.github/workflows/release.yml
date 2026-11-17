@@ -9,4 +9,4 @@ permissions:
 
 jobs:
   release:
-    uses: austral-project/.github/.github/workflows/bundle-release.yml@main
+    uses: austral-project/.github/.github/workflows/bundle-release.yml@master
