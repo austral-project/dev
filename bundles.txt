@@ -1,5 +1,9 @@
-# Austral V4 repositories, one per line: <repository> <type>
-# type: bundle | library | project
+# Austral repositories, one per line: <repository> <type>
+# type: bundle  | Symfony bundle, versioned (4.x / 3.1 branches, synchronized tags)
+#       library | PHP package without services (contracts), versioned like the bundles
+#       project | application skeleton (skeleton), versioned like the bundles
+#       tooling | organization or maintainer repository (.github, dev): master branch,
+#                 not versioned, ignored by clone / status / sync-standard / release
 # Order = layers (from bottom to top). Lines starting with # are ignored.
 # (new) = repository to create on GitHub before the first 4.0 release.
 
@@ -33,3 +37,6 @@ website-bundle           bundle
 # Tools
 maker-bundle             bundle    # (new)
 skeleton                 project   # (new, replaces sandbox)
+# Organization and tooling (master branch, not versioned)
+.github                  tooling
+dev                      tooling

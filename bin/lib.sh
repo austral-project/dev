@@ -31,7 +31,12 @@ all_repos() {
   sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$BUNDLES_FILE" | awk 'NF>=2 {print $1" "$2}'
 }
 
-repo_names() { all_repos | awk '{print $1}'; }
+# Repository names. "tooling" repositories (.github, dev) are only included when
+# INCLUDE_TOOLING=1 (set by setup-github): the other scripts only handle versioned packages.
+repo_names() {
+  if [ "${INCLUDE_TOOLING:-0}" = "1" ]; then all_repos | awk '{print $1}'
+  else all_repos | awk '$2!="tooling" {print $1}'; fi
+}
 
 repo_type() {
   local t
@@ -40,17 +45,25 @@ repo_type() {
   printf '%s' "$t"
 }
 
+# Same as repo_type, but refuses a "tooling" repository when the script does not handle them
+check_repo() {
+  local t; t="$(repo_type "$1")"
+  if [ "$t" = "tooling" ] && [ "${INCLUDE_TOOLING:-0}" != "1" ]; then
+    die "$1 is a tooling repository (not versioned): not handled by this script"
+  fi
+}
+
 # Selection: arguments "a,b,c" or "a b c", otherwise all repositories
 select_repos() {
   if [ "$#" -eq 0 ] || [ -z "${1:-}" ]; then repo_names; return; fi
   local r
-  for r in $(printf '%s ' "$@" | tr ',' ' '); do repo_type "$r" >/dev/null; printf '%s\n' "$r"; done
+  for r in $(printf '%s ' "$@" | tr ',' ' '); do check_repo "$r"; printf '%s\n' "$r"; done
 }
 
 # Call it in the main shell (not inside $(...)) so that die() really stops the script
 validate_selection() {
   local r
-  for r in $(printf '%s ' "$@" | tr ',' ' '); do repo_type "$r" >/dev/null; done
+  for r in $(printf '%s ' "$@" | tr ',' ' '); do check_repo "$r"; done
 }
 
 repo_dir() { printf '%s/%s' "$WORKSPACE" "$1"; }

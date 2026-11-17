@@ -6,12 +6,17 @@
 #   bin/setup-github admin-bundle --execute  apply to one repository
 #   bin/setup-github --create-missing        also create the missing repositories (contracts, maker-bundle, skeleton…)
 #
-# For each repository:
-#   1. creates the 4.x branch from 3.1 if it does not exist
-#   2. makes 4.x the default branch
-#   3. homepage, topics, wiki disabled, branches deleted after merge
-#   4. enables private vulnerability reporting
-#   5. protects the 4.x / 3.x branches and the v* tags (no deletion, no force-push)
+# What is done depends on the type given in bundles.txt:
+#   bundle, library, project (versioned):
+#     1. creates the 4.x branch from 3.1 if it does not exist
+#     2. makes 4.x the default branch
+#     3. homepage, topics (by type), wiki disabled, branches deleted after merge
+#     4. enables private vulnerability reporting
+#     5. protects the 4.x / 3.* branches and the v* tags (no deletion, no force-push)
+#   tooling (.github, dev):
+#     master stays the default branch; homepage, topics, wiki, vulnerability reporting
+#     as above; protects master only (no deletion, no force-push). No 4.x, no tag rule.
+INCLUDE_TOOLING=1
 source "$(dirname "$0")/lib.sh"
 require_cmd gh
 
@@ -20,26 +25,47 @@ for a in "$@"; do
   case "$a" in
     --execute) EXECUTE=1 ;;
     --create-missing) CREATE=1 ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option: $a" ;;
     *) ARGS+=("$a") ;;
   esac
 done
 validate_selection "${ARGS[@]+"${ARGS[@]}"}"
 
-TOPICS="austral,symfony,symfony-bundle,php,cms,admin"
 HOMEPAGE="https://austral.dev"
 RULESET_NAME="austral-protection"
 
+topics_for() { # topics by repository type
+  case "$1" in
+    bundle)  printf 'austral,symfony,symfony-bundle,php,cms,admin' ;;
+    library) printf 'austral,symfony,php' ;;
+    project) printf 'austral,symfony,php,cms,skeleton' ;;
+    tooling) printf 'austral' ;;
+  esac
+}
+
 run() { # prints, and only runs with --execute
   if [ "$EXECUTE" -eq 1 ]; then "$@"; else printf '    [dry run] %s\n' "$*"; fi
+}
+
+has_ruleset() { # has_ruleset <full repo> <name>
+  gh api "repos/$1/rulesets" -q ".[] | select(.name==\"$2\") | .id" 2>/dev/null | grep -q .
+}
+
+create_ruleset() { # create_ruleset <full repo> <label> <json>
+  if [ "$EXECUTE" -eq 1 ]; then
+    printf '%s' "$3" | gh api -X POST "repos/$1/rulesets" --input - --silent
+  else
+    printf '    [dry run] gh api -X POST repos/%s/rulesets (%s)\n' "$1" "$2"
+  fi
 }
 
 [ "$EXECUTE" -eq 1 ] && title "GitHub setup — APPLY" || title "GitHub setup — DRY RUN"
 
 for repo in $(select_repos "${ARGS[@]+"${ARGS[@]}"}"); do
   full="$ORG/$repo"
-  info "${BOLD}$repo${RESET}"
+  type="$(repo_type "$repo")"
+  info "${BOLD}$repo${RESET} ($type)"
 
   if ! gh api "repos/$full" --silent >/dev/null 2>&1; then
     if [ "$CREATE" -eq 1 ]; then
@@ -50,57 +76,71 @@ for repo in $(select_repos "${ARGS[@]+"${ARGS[@]}"}"); do
     fi
   fi
 
-  # 1. 4.x branch
-  if gh api "repos/$full/branches/4.x" --silent >/dev/null 2>&1; then
-    ok "4.x branch present"
-  elif gh api "repos/$full/branches/3.1" --silent >/dev/null 2>&1; then
-    sha="$(gh api "repos/$full/branches/3.1" -q .commit.sha)"
-    info "  → creating 4.x from 3.1 (${sha:0:7})"
-    run gh api -X POST "repos/$full/git/refs" -f ref="refs/heads/4.x" -f sha="$sha" --silent
+  if [ "$type" = "tooling" ]; then
+    main_branch="master"
+    if ! gh api "repos/$full/branches/$main_branch" --silent >/dev/null 2>&1; then
+      warn "no $main_branch branch: push it first"; continue
+    fi
+    ok "$main_branch branch present"
   else
-    warn "neither 4.x nor 3.1: push a 4.x branch first (new repository)"
-    continue
+    main_branch="4.x"
+    # 1. 4.x branch
+    if gh api "repos/$full/branches/4.x" --silent >/dev/null 2>&1; then
+      ok "4.x branch present"
+    elif gh api "repos/$full/branches/3.1" --silent >/dev/null 2>&1; then
+      sha="$(gh api "repos/$full/branches/3.1" -q .commit.sha)"
+      info "  → creating 4.x from 3.1 (${sha:0:7})"
+      run gh api -X POST "repos/$full/git/refs" -f ref="refs/heads/4.x" -f sha="$sha" --silent
+    else
+      warn "neither 4.x nor 3.1: push a 4.x branch first (new repository)"
+      continue
+    fi
   fi
 
   # 2. Default branch
   current_default="$(gh api "repos/$full" -q .default_branch 2>/dev/null || echo '?')"
-  if [ "$current_default" = "4.x" ]; then ok "default branch: 4.x"; else
-    info "  → default branch: $current_default → 4.x"
-    run gh repo edit "$full" --default-branch 4.x
+  if [ "$current_default" = "$main_branch" ]; then ok "default branch: $main_branch"; else
+    info "  → default branch: $current_default → $main_branch"
+    run gh repo edit "$full" --default-branch "$main_branch"
   fi
 
   # 3. Repository settings
-  info "  → homepage, topics, wiki, deletion of merged branches"
-  run gh repo edit "$full" --homepage "$HOMEPAGE" --add-topic "$TOPICS" \
+  info "  → homepage, topics ($(topics_for "$type")), wiki, deletion of merged branches"
+  run gh repo edit "$full" --homepage "$HOMEPAGE" --add-topic "$(topics_for "$type")" \
       --enable-wiki=false --delete-branch-on-merge
 
   # 4. Private vulnerability reporting
   info "  → private vulnerability reporting"
   run gh api -X PUT "repos/$full/private-vulnerability-reporting" --silent
 
-  # 5. Branch and tag protection
-  if gh api "repos/$full/rulesets" -q ".[] | select(.name==\"$RULESET_NAME\") | .id" 2>/dev/null | grep -q .; then
-    ok "protection rules already in place"
+  # 5. Protection rules (each rule is checked separately, so a re-run completes a partial setup)
+  if [ "$type" = "tooling" ]; then
+    branch_refs='"refs/heads/master"'
   else
-    info "  → protecting the 4.x, 3.* branches and the v* tags"
-    body="$(cat <<JSON
+    branch_refs='"refs/heads/4.x","refs/heads/3.*"'
+  fi
+  if has_ruleset "$full" "$RULESET_NAME-branches"; then
+    ok "branch protection already in place"
+  else
+    info "  → protecting the branches: ${branch_refs//\"/}"
+    create_ruleset "$full" "branches" "$(cat <<JSON
 {"name":"$RULESET_NAME-branches","target":"branch","enforcement":"active",
- "conditions":{"ref_name":{"include":["refs/heads/4.x","refs/heads/3.*"],"exclude":[]}},
+ "conditions":{"ref_name":{"include":[$branch_refs],"exclude":[]}},
  "rules":[{"type":"deletion"},{"type":"non_fast_forward"}]}
 JSON
 )"
-    tagbody="$(cat <<JSON
+  fi
+  if [ "$type" != "tooling" ]; then
+    if has_ruleset "$full" "$RULESET_NAME"; then
+      ok "tag protection already in place"
+    else
+      info "  → protecting the v* tags"
+      create_ruleset "$full" "tags" "$(cat <<JSON
 {"name":"$RULESET_NAME","target":"tag","enforcement":"active",
  "conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},
  "rules":[{"type":"deletion"},{"type":"update"},{"type":"non_fast_forward"}]}
 JSON
 )"
-    if [ "$EXECUTE" -eq 1 ]; then
-      printf '%s' "$body"    | gh api -X POST "repos/$full/rulesets" --input - --silent
-      printf '%s' "$tagbody" | gh api -X POST "repos/$full/rulesets" --input - --silent
-    else
-      printf '    [dry run] gh api -X POST repos/%s/rulesets (branches)\n' "$full"
-      printf '    [dry run] gh api -X POST repos/%s/rulesets (tags)\n' "$full"
     fi
   fi
 done

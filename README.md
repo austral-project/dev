@@ -21,6 +21,7 @@ All the scripts that change GitHub are **dry runs by default**; `--execute` appl
 ## Conventions
 
 - **Branches**: `4.x` = development (default branch); `3.1` = maintenance; `3.0` = frozen. A `4.0` branch is only created to maintain 4.0 while 4.1 moves forward on `4.x`.
+- **Repository types** (`bundles.txt`): `bundle`, `library` (contracts) and `project` (skeleton) are versioned and follow the branches above. `tooling` repositories (`.github`, `dev`) use a single `master` branch, are not versioned, and are only handled by `bin/setup-github`.
 - **Synchronized versions**: `X.Y.0` is released for **all** repositories at the same time. A fix `X.Y.Z` (Z > 0) can be released for a single repository.
 - **Tags**: `vX.Y.Z`, pre-releases `vX.Y.Z-beta.N` / `vX.Y.Z-RC1`. A published tag is never moved or deleted (protected by the GitHub rules).
 - **Constraints**: between bundles `"austral/xxx": "^4.0"`; `"php": ">=8.2"`; `"symfony/*": "^7.4"`. No `version` field in `composer.json`.
