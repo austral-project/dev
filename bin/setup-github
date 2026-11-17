@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Configures the GitHub repositories of the organization consistently.
+# Default: dry run (shows what would be done). --execute to apply.
+#
+#   bin/setup-github                         dry run on all repositories
+#   bin/setup-github admin-bundle --execute  apply to one repository
+#   bin/setup-github --create-missing        also create the missing repositories (contracts, maker-bundle, skeleton…)
+#
+# For each repository:
+#   1. creates the 4.x branch from 3.1 if it does not exist
+#   2. makes 4.x the default branch
+#   3. homepage, topics, wiki disabled, branches deleted after merge
+#   4. enables private vulnerability reporting
+#   5. protects the 4.x / 3.x branches and the v* tags (no deletion, no force-push)
+source "$(dirname "$0")/lib.sh"
+require_cmd gh
+
+EXECUTE=0; CREATE=0; ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --execute) EXECUTE=1 ;;
+    --create-missing) CREATE=1 ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) die "unknown option: $a" ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+validate_selection "${ARGS[@]+"${ARGS[@]}"}"
+
+TOPICS="austral,symfony,symfony-bundle,php,cms,admin"
+HOMEPAGE="https://austral.dev"
+RULESET_NAME="austral-protection"
+
+run() { # prints, and only runs with --execute
+  if [ "$EXECUTE" -eq 1 ]; then "$@"; else printf '    [dry run] %s\n' "$*"; fi
+}
+
+[ "$EXECUTE" -eq 1 ] && title "GitHub setup — APPLY" || title "GitHub setup — DRY RUN"
+
+for repo in $(select_repos "${ARGS[@]+"${ARGS[@]}"}"); do
+  full="$ORG/$repo"
+  info "${BOLD}$repo${RESET}"
+
+  if ! gh api "repos/$full" --silent >/dev/null 2>&1; then
+    if [ "$CREATE" -eq 1 ]; then
+      run gh repo create "$full" --public --description "Austral $(to_title "$repo")" --homepage "$HOMEPAGE"
+      [ "$EXECUTE" -eq 1 ] || { warn "missing repository: the rest will be done after it is created"; continue; }
+    else
+      warn "repository missing on GitHub (run again with --create-missing)"; continue
+    fi
+  fi
+
+  # 1. 4.x branch
+  if gh api "repos/$full/branches/4.x" --silent >/dev/null 2>&1; then
+    ok "4.x branch present"
+  elif gh api "repos/$full/branches/3.1" --silent >/dev/null 2>&1; then
+    sha="$(gh api "repos/$full/branches/3.1" -q .commit.sha)"
+    info "  → creating 4.x from 3.1 (${sha:0:7})"
+    run gh api -X POST "repos/$full/git/refs" -f ref="refs/heads/4.x" -f sha="$sha" --silent
+  else
+    warn "neither 4.x nor 3.1: push a 4.x branch first (new repository)"
+    continue
+  fi
+
+  # 2. Default branch
+  current_default="$(gh api "repos/$full" -q .default_branch 2>/dev/null || echo '?')"
+  if [ "$current_default" = "4.x" ]; then ok "default branch: 4.x"; else
+    info "  → default branch: $current_default → 4.x"
+    run gh repo edit "$full" --default-branch 4.x
+  fi
+
+  # 3. Repository settings
+  info "  → homepage, topics, wiki, deletion of merged branches"
+  run gh repo edit "$full" --homepage "$HOMEPAGE" --add-topic "$TOPICS" \
+      --enable-wiki=false --delete-branch-on-merge
+
+  # 4. Private vulnerability reporting
+  info "  → private vulnerability reporting"
+  run gh api -X PUT "repos/$full/private-vulnerability-reporting" --silent
+
+  # 5. Branch and tag protection
+  if gh api "repos/$full/rulesets" -q ".[] | select(.name==\"$RULESET_NAME\") | .id" 2>/dev/null | grep -q .; then
+    ok "protection rules already in place"
+  else
+    info "  → protecting the 4.x, 3.* branches and the v* tags"
+    body="$(cat <<JSON
+{"name":"$RULESET_NAME-branches","target":"branch","enforcement":"active",
+ "conditions":{"ref_name":{"include":["refs/heads/4.x","refs/heads/3.*"],"exclude":[]}},
+ "rules":[{"type":"deletion"},{"type":"non_fast_forward"}]}
+JSON
+)"
+    tagbody="$(cat <<JSON
+{"name":"$RULESET_NAME","target":"tag","enforcement":"active",
+ "conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},
+ "rules":[{"type":"deletion"},{"type":"update"},{"type":"non_fast_forward"}]}
+JSON
+)"
+    if [ "$EXECUTE" -eq 1 ]; then
+      printf '%s' "$body"    | gh api -X POST "repos/$full/rulesets" --input - --silent
+      printf '%s' "$tagbody" | gh api -X POST "repos/$full/rulesets" --input - --silent
+    else
+      printf '    [dry run] gh api -X POST repos/%s/rulesets (branches)\n' "$full"
+      printf '    [dry run] gh api -X POST repos/%s/rulesets (tags)\n' "$full"
+    fi
+  fi
+done
+
+[ "$EXECUTE" -eq 1 ] || info $'\nDry run finished. To apply: bin/setup-github --execute'

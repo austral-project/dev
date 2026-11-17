@@ -1,0 +1,35 @@
+# Austral V4 repositories, one per line: <repository> <type>
+# type: bundle | library | project
+# Order = layers (from bottom to top). Lines starting with # are ignored.
+# (new) = repository to create on GitHub before the first 4.0 release.
+
+# Layer 0 — Contracts
+contracts                library   # (new)
+# Layer 1 — Core
+tools-bundle             bundle
+entity-bundle            bundle
+# Layer 2 — Entity capabilities
+entity-file-bundle       bundle
+entity-translate-bundle  bundle
+http-bundle              bundle
+elastic-search-bundle    bundle
+cache-bundle             bundle
+# Layer 3 — Back office
+form-bundle              bundle
+list-bundle              bundle
+filter-bundle            bundle
+design-bundle            bundle
+security-bundle          bundle
+admin-bundle             bundle
+# Layer 4 — Features
+seo-bundle               bundle
+content-block-bundle     bundle
+graphic-items-bundle     bundle
+social-network-bundle    bundle
+email-bundle             bundle
+notify-bundle            bundle
+# Layer 5 — Website
+website-bundle           bundle
+# Tools
+maker-bundle             bundle    # (new)
+skeleton                 project   # (new, replaces sandbox)

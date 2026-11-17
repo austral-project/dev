@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Applies the standard files (standard/) to the repositories cloned into bundles/.
+# Commits nothing: review with git diff, then commit yourself.
+#
+#   bin/sync-standard                all repositories
+#   bin/sync-standard admin-bundle   one or more repositories
+#
+# "Managed" files: always overwritten (identical everywhere).
+# "Initial" files: created only if they do not exist (README, CHANGELOG, composer.json…).
+source "$(dirname "$0")/lib.sh"
+require_cmd git perl php
+validate_selection "$@"
+[ -d "$STANDARD_DIR" ] || die "standard/ directory not found: $STANDARD_DIR"
+
+MANAGED=(
+  .editorconfig
+  .gitattributes
+  .gitignore
+  .php-cs-fixer.dist.php
+  LICENSE
+  .github/workflows/ci.yml
+  .github/workflows/release.yml
+  .github/dependabot.yml
+)
+# source (in standard/) -> destination, created only if missing
+INITIAL_ALL=(
+  "CHANGELOG.md.dist:CHANGELOG.md"
+  "composer.json.dist:composer.json"
+)
+INITIAL_BUNDLE=(
+  "README.md.dist:README.md"
+  "UPGRADE-4.0.md.dist:UPGRADE-4.0.md"
+  "phpunit.xml.dist:phpunit.xml.dist"
+  "phpstan.dist.neon:phpstan.dist.neon"
+  "tests/BundleTest.php.dist:tests/BundleTest.php"
+)
+
+render() { # render <source> <destination>: replaces the {{VARIABLES}}
+  mkdir -p "$(dirname "$2")"
+  perl -pe 's/\{\{(\w+)\}\}/exists $ENV{"TPL_$1"} ? $ENV{"TPL_$1"} : "{{$1}}"/ge' "$1" > "$2"
+}
+
+for repo in $(select_repos "$@"); do
+  dir="$(repo_dir "$repo")"
+  info "${BOLD}$repo${RESET}"
+  if [ ! -d "$dir/.git" ]; then warn "not cloned, skipped"; continue; fi
+  type="$(repo_type "$repo")"
+
+  export TPL_BUNDLE="$repo"
+  export TPL_NAMESPACE; TPL_NAMESPACE="$(to_namespace "$repo")"
+  export TPL_TITLE; TPL_TITLE="$(to_title "$repo")"
+  export TPL_HEADER_NAME; TPL_HEADER_NAME="$(to_header_name "$repo")"
+  export TPL_CONFIG_KEY; TPL_CONFIG_KEY="$(to_config_key "$repo")"
+  desc="TODO: bundle description"
+  if [ -f "$dir/composer.json" ] && command -v php >/dev/null 2>&1; then
+    d="$(php -r '$c=json_decode(file_get_contents($argv[1]),true); echo $c["description"] ?? "";' "$dir/composer.json")"
+    [ -n "$d" ] && desc="$d"
+  fi
+  export TPL_DESCRIPTION="$desc"
+  export TPL_PREVIOUS_TAG; TPL_PREVIOUS_TAG="$(git -C "$dir" tag --list 'v3.*' | sed 's/^v//' | sort -V | tail -n1)"
+  [ -n "$TPL_PREVIOUS_TAG" ] && TPL_PREVIOUS_TAG="v$TPL_PREVIOUS_TAG"
+
+  for f in "${MANAGED[@]}"; do
+    mkdir -p "$(dirname "$dir/$f")"
+    if [ -f "$dir/$f" ] && cmp -s "$STANDARD_DIR/$f" "$dir/$f"; then continue; fi
+    cp "$STANDARD_DIR/$f" "$dir/$f"; ok "$f (updated)"
+  done
+
+  initial=("${INITIAL_ALL[@]}")
+  [ "$type" = "bundle" ] && initial+=("${INITIAL_BUNDLE[@]}")
+  for pair in "${initial[@]}"; do
+    src="${pair%%:*}"; dst="${pair#*:}"
+    if [ -e "$dir/$dst" ]; then continue; fi
+    render "$STANDARD_DIR/$src" "$dir/$dst"; ok "$dst (created)"
+    if [ "$dst" = "composer.json" ] && [ "$type" != "bundle" ]; then
+      # contracts = library, skeleton = project: no Symfony bundle dependencies by default
+      php -r '$f=$argv[1]; $c=json_decode(file_get_contents($f),true); $c["type"]=$argv[2];
+        $c["require"]=["php"=>">=8.2"]; unset($c["require-dev"]["symfony/framework-bundle"]);
+        file_put_contents($f, json_encode($c, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n");' "$dir/$dst" "$type"
+    fi
+    if [ "$dst" = "CHANGELOG.md" ] && [ -z "$TPL_PREVIOUS_TAG" ]; then
+      # New repository without a 3.x history: link to the tag instead of a comparison
+      perl -i -pe 's#^\[4\.0\.0\]: .*#[4.0.0]: https://github.com/'"$ORG/$repo"'/releases/tag/v4.0.0#' "$dir/$dst"
+    fi
+  done
+
+  if grep -rIl '{{[A-Z_]*}}' "$dir" --exclude-dir=.git --exclude-dir=vendor >/dev/null 2>&1; then
+    warn "unreplaced variables: $(grep -rIl '{{[A-Z_]*}}' "$dir" --exclude-dir=.git --exclude-dir=vendor | sed "s#$dir/##" | tr '\n' ' ')"
+  fi
+  changes="$(git -C "$dir" status --porcelain | wc -l | tr -d ' ')"
+  [ "$changes" -gt 0 ] && info "  → $changes file(s) to review: git -C $dir diff" || ok "already compliant"
+done

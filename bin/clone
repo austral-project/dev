@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Clones (or updates) the Austral repositories into bundles/.
+#   bin/clone                 all repositories
+#   bin/clone admin-bundle    one or more repositories
+source "$(dirname "$0")/lib.sh"
+require_cmd git
+validate_selection "$@"
+
+mkdir -p "$WORKSPACE"
+for repo in $(select_repos "$@"); do
+  dir="$(repo_dir "$repo")"
+  if [ -d "$dir/.git" ]; then
+    git -C "$dir" fetch --quiet --tags --prune origin && ok "$repo: updated"
+  elif git ls-remote --exit-code "https://github.com/$ORG/$repo.git" >/dev/null 2>&1; then
+    git clone --quiet "git@github.com:$ORG/$repo.git" "$dir" && ok "$repo: cloned"
+  else
+    warn "$repo: repository missing on GitHub (to be created)"
+  fi
+done

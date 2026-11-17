@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# Releases a version of Austral: checks every repository, then creates and pushes the tags.
+# The GitHub Release of each repository is then created by its release.yml workflow,
+# and Packagist is updated through the GitHub hook.
+#
+#   bin/release 4.0.0                      dry run on all repositories (default)
+#   bin/release 4.0.0 --execute            actual release
+#   bin/release 4.0.3 --only form-bundle   fix for a single bundle (X.Y.Z with Z > 0 only)
+#
+# Options:
+#   --only a,b     limit to the listed repositories (forbidden for X.Y.0: synchronized versions)
+#   --execute      create and push the tags (dry run otherwise)
+#   --skip-ci      do not require a green CI on the tagged commit (not recommended)
+source "$(dirname "$0")/lib.sh"
+require_cmd git
+
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+
+VERSION=""; ONLY=""; EXECUTE=0; SKIP_CI=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --only) ONLY="${2:-}"; shift 2 ;;
+    --only=*) ONLY="${1#--only=}"; shift ;;
+    --execute) EXECUTE=1; shift ;;
+    --skip-ci) SKIP_CI=1; shift ;;
+    -h|--help) usage ;;
+    -*) die "unknown option: $1" ;;
+    *) [ -z "$VERSION" ] || die "only one version expected"; VERSION="$1"; shift ;;
+  esac
+done
+[ -n "$VERSION" ] || usage
+VERSION="${VERSION#v}"
+TAG="v$VERSION"
+
+# --- Version format ----------------------------------------------------------
+SEMVER='^([0-9]+)\.([0-9]+)\.([0-9]+)(-(alpha|beta|RC)\.?[0-9]+)?$'
+[[ "$VERSION" =~ $SEMVER ]] || die "invalid version '$VERSION' (expected: X.Y.Z, X.Y.Z-beta.N, X.Y.Z-RC1)"
+MAJOR="${BASH_REMATCH[1]}"; MINOR="${BASH_REMATCH[2]}"; PATCH="${BASH_REMATCH[3]}"; PRE="${BASH_REMATCH[4]}"
+
+# --- Repositories concerned --------------------------------------------------
+# (compatible with the bash 3.2 of macOS: no mapfile, no associative arrays)
+validate_selection "$ONLY"
+REPOS=(); while IFS= read -r r; do REPOS+=("$r"); done < <(select_repos "$ONLY")
+ALL_COUNT="$(repo_names | wc -l | tr -d ' ')"
+if [ "$PATCH" -eq 0 ] && [ "${#REPOS[@]}" -ne "$ALL_COUNT" ]; then
+  die "$TAG is a major or minor version: it must be released for ALL repositories (synchronized versions). Remove --only."
+fi
+
+has_gh=0; command -v gh >/dev/null 2>&1 && has_gh=1
+has_php=0; command -v php >/dev/null 2>&1 && has_php=1
+has_composer=0; command -v composer >/dev/null 2>&1 && has_composer=1
+[ "$SKIP_CI" -eq 1 ] || [ "$has_gh" -eq 1 ] || die "gh is required to check the CI (or use --skip-ci)"
+
+MODE="DRY RUN"; [ "$EXECUTE" -eq 1 ] && MODE="RELEASE"
+title "Release $TAG — $MODE — ${#REPOS[@]} repository(ies)"
+
+ERRORS=0
+SHAS=()   # SHAS[i] = checked commit for REPOS[i]
+
+err() { fail "$*"; ERRORS=$((ERRORS + 1)); }
+
+for i in "${!REPOS[@]}"; do
+  repo="${REPOS[$i]}"
+  SHAS[$i]=""
+  info "${BOLD}$repo${RESET}"
+  dir="$(repo_dir "$repo")"
+  if [ ! -d "$dir/.git" ]; then err "not cloned in $dir (run bin/clone)"; continue; fi
+
+  if ! git -C "$dir" fetch --quiet --tags origin; then err "git fetch failed"; continue; fi
+
+  # Branch: X.Y if it exists (maintenance), otherwise X.x
+  branch="$MAJOR.x"
+  git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$MAJOR.$MINOR" && branch="$MAJOR.$MINOR"
+
+  if ! git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    err "remote branch origin/$branch missing"; continue
+  fi
+
+  current="$(git -C "$dir" branch --show-current)"
+  [ "$current" = "$branch" ] && ok "on $branch" || err "on '$current' instead of '$branch'"
+
+  [ -z "$(git -C "$dir" status --porcelain)" ] && ok "clean working tree" || err "uncommitted changes"
+
+  head="$(git -C "$dir" rev-parse HEAD)"
+  remote_head="$(git -C "$dir" rev-parse "origin/$branch")"
+  SHAS[$i]="$head"
+  [ "$head" = "$remote_head" ] && ok "up to date with origin/$branch (${head:0:7})" \
+    || err "HEAD (${head:0:7}) differs from origin/$branch (${remote_head:0:7}): pull or push first"
+
+  if git -C "$dir" rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null \
+     || [ -n "$(git -C "$dir" ls-remote --tags origin "refs/tags/$TAG")" ]; then
+    err "tag $TAG already exists"
+  else
+    ok "tag $TAG available"
+  fi
+
+  # The new version must be greater than the latest tag of the same major
+  last="$(git -C "$dir" tag --list "v$MAJOR.*" | sed 's/^v//' | sort -V | tail -n1)"
+  if [ -n "$last" ]; then
+    highest="$(printf '%s\n%s\n' "$last" "$VERSION" | sort -V | tail -n1)"
+    if [ "$highest" = "$VERSION" ] && [ "$last" != "$VERSION" ]; then ok "follows v$last"; else err "$TAG is not greater than v$last"; fi
+  fi
+
+  # CHANGELOG: a dated section is required
+  if [ ! -f "$dir/CHANGELOG.md" ]; then
+    err "CHANGELOG.md missing"
+  elif grep -Eq "^## \[$(printf '%s' "$VERSION" | sed 's/\./\\./g')\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" "$dir/CHANGELOG.md"; then
+    entries="$(awk -v v="$VERSION" 'index($0, "## [" v "]")==1 {f=1; next} f && /^## / {exit} f && /^[[:space:]]*[-*] / {n++} END {print n+0}' "$dir/CHANGELOG.md")"
+    if [ "$entries" -gt 0 ]; then ok "CHANGELOG: section [$VERSION] ($entries entry(ies))"; else err "CHANGELOG: section [$VERSION] is empty"; fi
+  else
+    err "CHANGELOG: section '## [$VERSION] - YYYY-MM-DD' missing"
+  fi
+
+  # composer.json: no version field, austral/* constraints on the right major
+  if [ -f "$dir/composer.json" ] && [ "$has_php" -eq 1 ]; then
+    bad="$(php -r '
+      $c = json_decode(file_get_contents($argv[1]), true);
+      if (!is_array($c)) { echo "composer.json unreadable\n"; exit; }
+      if (isset($c["version"])) { echo "\"version\" field to remove (Packagist reads the tags)\n"; }
+      foreach (["require", "require-dev"] as $s) {
+        foreach ($c[$s] ?? [] as $p => $v) {
+          if (str_starts_with($p, "austral/") && !preg_match("/^\\^".$argv[2]."\\.\\d+$/", $v)) {
+            echo "$s $p: \"$v\" (expected ^".$argv[2].".Y)\n";
+          }
+        }
+      }' "$dir/composer.json" "$MAJOR")"
+    if [ -z "$bad" ]; then ok "composer.json: austral/* constraints on ^$MAJOR"; else
+      while IFS= read -r l; do err "composer.json: $l"; done <<< "$bad"; fi
+  fi
+  if [ "$has_composer" -eq 1 ] && [ -f "$dir/composer.json" ]; then
+    (cd "$dir" && composer validate --strict --no-check-lock --quiet >/dev/null 2>&1) \
+      && ok "composer validate --strict" || err "composer validate --strict fails"
+  fi
+
+  # Green CI on this exact commit
+  if [ "$SKIP_CI" -eq 0 ]; then
+    ci="$(gh run list -R "$ORG/$repo" --workflow ci.yml --commit "$head" --limit 1 \
+          --json conclusion,status -q '.[0] | (.conclusion // .status) // "none"' 2>/dev/null || echo "unknown")"
+    [ "$ci" = "success" ] && ok "green CI on ${head:0:7}" || err "CI on ${head:0:7}: $ci"
+  else
+    warn "CI not checked (--skip-ci)"
+  fi
+done
+
+title "Summary"
+if [ "$ERRORS" -gt 0 ]; then
+  fail "$ERRORS problem(s): nothing was tagged."
+  exit 1
+fi
+ok "All checks pass for ${#REPOS[@]} repository(ies)."
+
+if [ "$EXECUTE" -eq 0 ]; then
+  info ""
+  info "Dry run finished. To release: bin/release $VERSION${ONLY:+ --only $ONLY} --execute"
+  exit 0
+fi
+
+# --- Release -----------------------------------------------------------------
+[ -t 0 ] || die "--execute requires an interactive confirmation"
+printf '\nType %s to create and push %d tag(s): ' "$TAG" "${#REPOS[@]}"
+read -r answer
+[ "$answer" = "$TAG" ] || die "wrong confirmation, aborting."
+
+title "Creating the tags"
+for i in "${!REPOS[@]}"; do
+  repo="${REPOS[$i]}"
+  git -C "$(repo_dir "$repo")" tag -a "$TAG" -m "Austral $TAG" "${SHAS[$i]}"
+  ok "$repo: $TAG → ${SHAS[$i]:0:7}"
+done
+
+title "Pushing the tags"
+PUSHED=()
+for repo in "${REPOS[@]}"; do
+  if git -C "$(repo_dir "$repo")" push --quiet origin "refs/tags/$TAG"; then
+    ok "$repo"; PUSHED+=("$repo")
+  else
+    fail "$repo: push failed. Already released: ${PUSHED[*]:-none}."
+    fail "Fix it, then run the command again with --only on the remaining repositories (the local tag already exists: delete it with git tag -d $TAG)."
+    exit 1
+  fi
+done
+
+title "Done"
+ok "$TAG released on ${#PUSHED[@]} repository(ies)."
+info "  The GitHub Releases are created by the release.yml workflow of each repository."
+info "  Check: bin/status   and   https://packagist.org/packages/austral/"
+[ -z "$PRE" ] || warn "Pre-release: marked as \"pre-release\" on GitHub."
