@@ -130,9 +130,9 @@ check_readme() { # <dir> <repo>
   for line in \
     "[![Version](https://img.shields.io/packagist/v/$pkg?label=version)](https://packagist.org/packages/$pkg)" \
     "[![CI](https://github.com/$ORG/$repo/actions/workflows/ci.yml/badge.svg?branch=4.x)](https://github.com/$ORG/$repo/actions/workflows/ci.yml)" \
-    "[![PHP](https://img.shields.io/packagist/dependency-v/$pkg/php)](https://packagist.org/packages/$pkg)" \
+    "[![PHP](https://img.shields.io/packagist/dependency-v/$pkg/php?version=4.x-dev)](https://packagist.org/packages/$pkg)" \
     "[![Symfony](https://img.shields.io/badge/symfony-7.4-black)](https://symfony.com/releases/7.4)" \
-    "[![License](https://img.shields.io/packagist/l/$pkg)](LICENSE)" \
+    "[![License](https://img.shields.io/github/license/$ORG/$repo)](LICENSE)" \
     "## Credits" \
     "$CREDITS_LINE"
   do
