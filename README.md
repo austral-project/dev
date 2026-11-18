@@ -40,6 +40,8 @@ cd bundles/tools-bundle
 bin/check                      # from dev/: every repository, in the bundles.txt order
 ```
 
+`bin/check` also checks the README: the 5 standard badges (Version, CI, PHP, Symfony, License, in this order) and the Credits section of `standard/README.md.dist`.
+
 The checks run on a clean copy in `.cache/check/` (your `vendor/` is not touched), with the PHP versions and the options read from the repository's `.github/workflows/ci.yml`. Images: `australproject/php:<version>` (`AUSTRAL_PHP_IMAGE_TPL`) and `composer:2`. The logs of the failing steps are in `.cache/check/logs/`.
 
 ## Releasing a version

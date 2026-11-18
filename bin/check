@@ -2,6 +2,7 @@
 # Runs the CI checks of a repository locally, before pushing.
 # Same steps as the shared workflow (austral-project/.github bundle-ci.yml), in Docker,
 # on a clean copy of the repository: your vendor/ and your files are not touched.
+# Also checks the README of the repository (standard badges and Credits section).
 #
 #   bin/check                       from inside bundles/<repo>: that repository, otherwise all
 #   bin/check tools-bundle          one or more repositories ("a,b" or "a b")
@@ -18,7 +19,7 @@
 source "$(dirname "$0")/lib.sh"
 require_cmd git docker tar
 
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 MATRIX=0; COMMITTED=0; FIX=0; VERBOSE=0; ARGS=()
 while [ "$#" -gt 0 ]; do
@@ -118,6 +119,35 @@ ensure_require_checker() {
   composer_in "$d" require --no-interaction --no-progress maglnet/composer-require-checker
 }
 
+# README of a public repository: the 5 standard badges and the Credits section, exactly
+# as in standard/README.md.dist (same order: Version, CI, PHP, Symfony, License)
+CREDITS_LINE='Created by [Matthieu Beurel](https://www.mbeurel.com). Sponsored by [Yipikai Studio](https://yipikai.studio).'
+check_readme() { # <dir> <repo>
+  local dir="$1" repo="$2" file="$1/README.md" pkg missing=0 line
+  if [ ! -f "$file" ]; then echo "README.md missing"; return 1; fi
+  pkg="$(sed -n 's/^[[:space:]]*"name":[[:space:]]*"\(austral\/[^"]*\)".*/\1/p' "$dir/composer.json" | head -n1)"
+  [ -n "$pkg" ] || { echo "composer.json: \"name\" austral/... not found"; return 1; }
+  for line in \
+    "[![Version](https://img.shields.io/packagist/v/$pkg?label=version)](https://packagist.org/packages/$pkg)" \
+    "[![CI](https://github.com/$ORG/$repo/actions/workflows/ci.yml/badge.svg?branch=4.x)](https://github.com/$ORG/$repo/actions/workflows/ci.yml)" \
+    "[![PHP](https://img.shields.io/packagist/dependency-v/$pkg/php)](https://packagist.org/packages/$pkg)" \
+    "[![Symfony](https://img.shields.io/badge/symfony-7.4-black)](https://symfony.com/releases/7.4)" \
+    "[![License](https://img.shields.io/packagist/l/$pkg)](LICENSE)" \
+    "## Credits" \
+    "$CREDITS_LINE"
+  do
+    grep -qxF -- "$line" "$file" || { echo "missing line: $line"; missing=1; }
+  done
+  # The badges must be in the standard order, right after the title
+  if [ "$missing" -eq 0 ]; then
+    local order
+    order="$(grep -oE '^\[!\[(Version|CI|PHP|Symfony|License)\]' "$file" | tr -d '[]!' | tr '\n' ' ')"
+    [ "$order" = "Version CI PHP Symfony License " ] || { echo "badges order: $order(expected: Version CI PHP Symfony License)"; missing=1; }
+  fi
+  [ "$missing" -eq 0 ] && echo "README.md: badges and Credits OK"
+  return "$missing"
+}
+
 # --- Steps -----------------------------------------------------------------
 RESULTS=()   # "repo|step|ok|ko|skip"
 ERRORS=0
@@ -168,6 +198,9 @@ for repo in "${REPOS[@]}"; do
   mkdir -p "$LOG_DIR"
   copy_repo "$dir" "$work"
   info "  PHP $QPHP (quality), tests on: $PHPS"
+
+  # 0. README of the public repository (badges, Credits)
+  run_step "$repo" "README (badges, Credits)" check_readme "$work" "$repo" || true
 
   # 1. composer validate (on the untouched composer.json)
   if ! run_step "$repo" "composer validate --strict" composer_in "$work" validate --strict --no-check-lock; then
