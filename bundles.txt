@@ -5,10 +5,9 @@
 #       tooling | organization or maintainer repository (.github, dev): master branch,
 #                 not versioned, ignored by clone / status / sync-standard / release
 # Order = layers (from bottom to top). Lines starting with # are ignored.
-# (new) = repository to create on GitHub before the first 4.0 release.
 
 # Layer 0 — Contracts
-contracts                library   # (new)
+contracts                library
 # Layer 1 — Core
 tools-bundle             bundle
 entity-bundle            bundle
@@ -35,8 +34,8 @@ notify-bundle            bundle
 # Layer 5 — Website
 website-bundle           bundle
 # Tools
-maker-bundle             bundle    # (new)
-skeleton                 project   # (new, replaces sandbox)
+maker-bundle             bundle
+skeleton                 project   # replaces sandbox
 # Organization and tooling (master branch, not versioned)
 .github                  tooling
 dev                      tooling
