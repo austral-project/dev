@@ -23,7 +23,7 @@
         "security": "https://github.com/austral-project/.github/blob/master/SECURITY.md"
     },
     "require": {
-        "php": ">=8.2",
+        "php": ">=8.4",
         "symfony/config": "^7.4",
         "symfony/dependency-injection": "^7.4",
         "symfony/http-kernel": "^7.4"

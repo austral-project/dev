@@ -4,7 +4,7 @@ The maintainer's working repository: it **contains no Austral code**. It is used
 
 ## Requirements
 
-`git`, `gh` (logged in: `gh auth login`), `perl`, and `php` 8.2+ / `composer`. Without a local PHP, the scripts run them through Docker (`australproject/php:8.4` and `composer:2`, to change with `AUSTRAL_PHP_IMAGE` / `AUSTRAL_COMPOSER_IMAGE`).
+`git`, `gh` (logged in: `gh auth login`), `perl`, and `php` 8.4+ / `composer`. Without a local PHP, the scripts run them through Docker (`australproject/php:8.4` and `composer:2`, to change with `AUSTRAL_PHP_IMAGE` / `AUSTRAL_COMPOSER_IMAGE`).
 
 ## Commands
 
@@ -25,7 +25,7 @@ All the scripts that change GitHub are **dry runs by default**; `--execute` appl
 - **Repository types** (`bundles.txt`): `bundle`, `library` (contracts) and `project` (skeleton) are versioned and follow the branches above. `tooling` repositories (`.github`, `dev`) use a single `master` branch, are not versioned, and are only handled by `bin/setup-github`.
 - **Synchronized versions**: `X.Y.0` is released for **all** repositories at the same time. A fix `X.Y.Z` (Z > 0) can be released for a single repository.
 - **Tags**: `vX.Y.Z`, pre-releases `vX.Y.Z-beta.N` / `vX.Y.Z-RC1`. A published tag is never moved or deleted (protected by the GitHub rules).
-- **Constraints**: between bundles `"austral/xxx": "^4.0"`; `"php": ">=8.2"`; `"symfony/*": "^7.4"`. No `version` field in `composer.json`.
+- **Constraints**: between bundles `"austral/xxx": "^4.0"`; `"php": ">=8.4"`; `"symfony/*": "^7.4"`. No `version` field in `composer.json`.
 - **CHANGELOG**: Keep a Changelog format; the `## [X.Y.Z] - YYYY-MM-DD` section is required before tagging, and becomes the text of the GitHub Release.
 - **Language**: public files (README, CHANGELOG, comments, messages) are written in English. French stays in the `*.fr.yaml` translation files.
 

@@ -75,7 +75,7 @@ for repo in $(select_repos "$@"); do
     if [ "$dst" = "composer.json" ] && [ "$type" != "bundle" ]; then
       # contracts = library, skeleton = project: no Symfony bundle dependencies by default
       php -r '$f=$argv[1]; $c=json_decode(file_get_contents($f),true); $c["type"]=$argv[2];
-        $c["require"]=["php"=>">=8.2"]; unset($c["require-dev"]["symfony/framework-bundle"]);
+        $c["require"]=["php"=>">=8.4"]; unset($c["require-dev"]["symfony/framework-bundle"]);
         if ($argv[2]==="project") { $c["autoload"]=["psr-4"=>["App\\"=>"src/"]]; $c["autoload-dev"]=["psr-4"=>["App\\Tests\\"=>"tests/"]]; }
         file_put_contents($f, json_encode($c, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n");' "$dir/$dst" "$type"
     fi

@@ -185,8 +185,8 @@ for repo in "${REPOS[@]}"; do
   fi
 
   ci="$dir/.github/workflows/ci.yml"
-  QPHP="$(ci_input "$ci" quality-php-version 8.2)"
-  PHPS="$(ci_input "$ci" php-versions '8.2,8.3,8.4' | tr -d '[]' | tr ',' ' ')"
+  QPHP="$(ci_input "$ci" quality-php-version 8.4)"
+  PHPS="$(ci_input "$ci" php-versions '8.4,8.5' | tr -d '[]' | tr ',' ' ')"
   RUN_CS="$(ci_input "$ci" run-cs-fixer true)"
   RUN_STAN="$(ci_input "$ci" run-phpstan true)"
   RUN_REQ="$(ci_input "$ci" run-require-checker true)"
