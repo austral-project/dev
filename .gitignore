@@ -2,6 +2,9 @@
 .DS_Store
 .idea/
 
+# bin/check: clean copies, logs, composer cache and tools
+/.cache/
+
 # V4 rebase working files (not published)
 conflits-*.txt
 *-conflits.txt

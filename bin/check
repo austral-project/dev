@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+# Runs the CI checks of a repository locally, before pushing.
+# Same steps as the shared workflow (austral-project/.github bundle-ci.yml), in Docker,
+# on a clean copy of the repository: your vendor/ and your files are not touched.
+#
+#   bin/check                       from inside bundles/<repo>: that repository, otherwise all
+#   bin/check tools-bundle          one or more repositories ("a,b" or "a b")
+#   bin/check tools-bundle --matrix also PHPUnit on every PHP version, lowest and highest deps
+#
+# Options:
+#   --matrix       PHPUnit on all the CI PHP versions x (lowest, highest) dependencies (slow)
+#   --committed    check the last commit only (git HEAD), not the uncommitted changes
+#   --fix          apply PHP-CS-Fixer to your files (in the real repository) instead of the dry run
+#   --verbose      show the output of every step (otherwise only the failing ones)
+#
+# Environment: AUSTRAL_PHP_IMAGE_TPL (default "australproject/php:%s"), AUSTRAL_COMPOSER_IMAGE
+# (default "composer:2"), AUSTRAL_TOOL_PHP (PHP version for composer-require-checker, default 8.4).
+source "$(dirname "$0")/lib.sh"
+require_cmd git docker tar
+
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+
+MATRIX=0; COMMITTED=0; FIX=0; VERBOSE=0; ARGS=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --matrix) MATRIX=1; shift ;;
+    --committed) COMMITTED=1; shift ;;
+    --fix) FIX=1; shift ;;
+    --verbose|-v) VERBOSE=1; shift ;;
+    -h|--help) usage ;;
+    -*) die "unknown option: $1" ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+[ "$FIX" -eq 0 ] || [ "$COMMITTED" -eq 0 ] || die "--fix and --committed cannot be used together"
+
+PHP_IMAGE_TPL="${AUSTRAL_PHP_IMAGE_TPL:-australproject/php:%s}"
+COMPOSER_IMAGE="${AUSTRAL_COMPOSER_IMAGE:-composer:2}"
+TOOL_PHP="${AUSTRAL_TOOL_PHP:-8.4}"
+CACHE="$DEV_ROOT/.cache"
+COMPOSER_HOME_DIR="$CACHE/composer"
+TOOLS_DIR="$CACHE/tools"
+mkdir -p "$COMPOSER_HOME_DIR" "$TOOLS_DIR" "$CACHE/check"
+
+# --- Repositories ------------------------------------------------------------
+REPOS=()
+if [ "${#ARGS[@]}" -eq 0 ]; then
+  case "$PWD/" in
+    "$WORKSPACE"/*/*) cur="${PWD#"$WORKSPACE"/}"; cur="${cur%%/*}"; check_repo "$cur"; REPOS=("$cur") ;;
+  esac
+fi
+if [ "${#REPOS[@]}" -eq 0 ]; then
+  validate_selection "${ARGS[@]:-}"
+  while IFS= read -r r; do REPOS+=("$r"); done < <(select_repos "${ARGS[@]:-}")
+fi
+
+# --- Docker helpers ----------------------------------------------------------
+MOUNTS=(-v "$DEV_ROOT:$DEV_ROOT")
+case "$WORKSPACE/" in "$DEV_ROOT"/*) ;; *) MOUNTS+=(-v "$WORKSPACE:$WORKSPACE") ;; esac
+
+# docker_in <image> <workdir> <entrypoint> [args...]
+docker_in() {
+  local image="$1" wd="$2" entry="$3"; shift 3
+  docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
+    -e COMPOSER_HOME="$COMPOSER_HOME_DIR" -e COMPOSER_CACHE_DIR="$COMPOSER_HOME_DIR/cache" \
+    "${MOUNTS[@]}" -w "$wd" --entrypoint "$entry" "$image" "$@" </dev/null
+}
+php_image() { printf "$PHP_IMAGE_TPL" "$1"; }
+composer_in() { local wd="$1"; shift; docker_in "$COMPOSER_IMAGE" "$wd" composer "$@"; }
+php_in() { local ver="$1" wd="$2"; shift 2; docker_in "$(php_image "$ver")" "$wd" php "$@"; }
+
+# Pulls the PHP image of a version once; returns 1 if it does not exist
+IMAGES_OK=" "; IMAGES_KO=" "
+ensure_image() {
+  local img; img="$(php_image "$1")"
+  case "$IMAGES_OK" in *" $img "*) return 0 ;; esac
+  case "$IMAGES_KO" in *" $img "*) return 1 ;; esac
+  if docker image inspect "$img" >/dev/null 2>&1 || docker pull --quiet "$img" >/dev/null 2>&1; then
+    IMAGES_OK="$IMAGES_OK$img "; return 0
+  fi
+  IMAGES_KO="$IMAGES_KO$img "; return 1
+}
+
+# --- Reading the repository's ci.yml (inputs of the shared workflow) -----------
+ci_input() { # <ci.yml> <name> <default>
+  local v=""
+  [ -f "$1" ] && v="$(sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" "$1" | head -n1 | tr -d "\"'[:space:]")"
+  printf '%s' "${v:-$3}"
+}
+
+# --- Copy of the repository ----------------------------------------------------
+# Working tree (tracked + new non-ignored files), or HEAD only with --committed
+copy_repo() { # <src> <dest>
+  local src="$1" dest="$2"
+  if [ "$COMMITTED" -eq 1 ]; then
+    # A local clone, not git archive: archive would drop the export-ignore files (tests/...)
+    git clone --quiet --no-hardlinks "$src" "$dest"
+  else
+    mkdir -p "$dest"
+    git -C "$src" ls-files -z -co --exclude-standard \
+      | while IFS= read -r -d '' f; do if [ -e "$src/$f" ]; then printf '%s\0' "$f"; fi; done \
+      | (cd "$src" && tar --null -T - -cf -) | tar -xf - -C "$dest"
+  fi
+}
+
+# composer update for a PHP version (the platform is forced in the copy, as setup-php does in the CI)
+install_deps() { # <dir> <php version> [extra composer options]
+  local dir="$1" ver="$2"; shift 2
+  composer_in "$dir" config platform.php "$ver.99" \
+    && composer_in "$dir" update --no-interaction --no-progress --prefer-dist --ignore-platform-req='ext-*' "$@"
+}
+
+# composer-require-checker, installed once in .cache/tools
+ensure_require_checker() {
+  local d="$TOOLS_DIR/composer-require-checker"
+  [ -f "$d/vendor/bin/composer-require-checker" ] && return 0
+  mkdir -p "$d"
+  composer_in "$d" require --no-interaction --no-progress maglnet/composer-require-checker
+}
+
+# --- Steps -----------------------------------------------------------------
+RESULTS=()   # "repo|step|ok|ko|skip"
+ERRORS=0
+record() { RESULTS+=("$1|$2|$3"); [ "$3" != "ko" ] || ERRORS=$((ERRORS + 1)); }
+
+# run_step <repo> <label> <command...>: logs the output, shows it if the step fails
+run_step() {
+  local repo="$1" label="$2"; shift 2
+  local log="$LOG_DIR/$(printf '%s' "$label" | tr -c 'A-Za-z0-9.' '-').log" rc=0
+  if [ "$VERBOSE" -eq 1 ]; then
+    info "  ${BOLD}→ $label${RESET}"
+    "$@" 2>&1 | tee "$log" || rc=$?   # pipefail (lib.sh): the status of the command, not of tee
+  else
+    "$@" >"$log" 2>&1 || rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then ok "$label"; record "$repo" "$label" ok; return 0; fi
+  fail "$label (exit $rc)"
+  if [ "$VERBOSE" -eq 0 ]; then
+    tail -n 120 "$log" | sed 's/^/      /'
+    info "      full log: ${log#"$DEV_ROOT"/}"
+  fi
+  record "$repo" "$label" ko
+  return 1
+}
+skip_step() { warn "$2 — skipped ($3)"; record "$1" "$2" skip; }
+
+for repo in "${REPOS[@]}"; do
+  dir="$(repo_dir "$repo")"
+  title "$repo"
+  if [ ! -d "$dir/.git" ]; then fail "not cloned in $dir (run bin/clone)"; record "$repo" clone ko; continue; fi
+  if [ ! -f "$dir/composer.json" ]; then skip_step "$repo" "all" "no composer.json"; continue; fi
+
+  if [ "$COMMITTED" -eq 0 ] && [ -n "$(git -C "$dir" status --porcelain)" ]; then
+    warn "uncommitted changes are checked too (--committed to check HEAD only)"
+  fi
+
+  ci="$dir/.github/workflows/ci.yml"
+  QPHP="$(ci_input "$ci" quality-php-version 8.2)"
+  PHPS="$(ci_input "$ci" php-versions '8.2,8.3,8.4' | tr -d '[]' | tr ',' ' ')"
+  RUN_CS="$(ci_input "$ci" run-cs-fixer true)"
+  RUN_STAN="$(ci_input "$ci" run-phpstan true)"
+  RUN_REQ="$(ci_input "$ci" run-require-checker true)"
+  RUN_DEPTRAC="$(ci_input "$ci" run-deptrac false)"
+
+  work="$CACHE/check/$repo"
+  LOG_DIR="$CACHE/check/logs/$repo"
+  rm -rf "$work" "$work-nodev" "$work-matrix" "$LOG_DIR"
+  mkdir -p "$LOG_DIR"
+  copy_repo "$dir" "$work"
+  info "  PHP $QPHP (quality), tests on: $PHPS"
+
+  # 1. composer validate (on the untouched composer.json)
+  if ! run_step "$repo" "composer validate --strict" composer_in "$work" validate --strict --no-check-lock; then
+    info "  (the CI stops here: the other jobs depend on it)"; continue
+  fi
+
+  # 2. Install with the quality PHP version
+  if ! ensure_image "$QPHP"; then
+    fail "Docker image $(php_image "$QPHP") not found (AUSTRAL_PHP_IMAGE_TPL)"; record "$repo" "image PHP $QPHP" ko; continue
+  fi
+  if ! run_step "$repo" "composer install (PHP $QPHP, highest)" install_deps "$work" "$QPHP"; then
+    continue
+  fi
+
+  # 3. PHP-CS-Fixer
+  if [ "$RUN_CS" = "true" ]; then
+    if [ "$FIX" -eq 1 ]; then
+      # Applied to the real files, with the tools of the copy
+      run_step "$repo" "PHP-CS-Fixer fix (your files)" \
+        php_in "$QPHP" "$dir" "$work/vendor/bin/php-cs-fixer" fix --config="$dir/.php-cs-fixer.dist.php" --diff --using-cache=no || true
+      copy_repo "$dir" "$work"   # following steps on the fixed files (vendor/ is kept)
+    else
+      run_step "$repo" "PHP-CS-Fixer (dry run)" \
+        php_in "$QPHP" "$work" vendor/bin/php-cs-fixer fix --dry-run --diff --using-cache=no || true
+    fi
+  else
+    skip_step "$repo" "PHP-CS-Fixer" "run-cs-fixer: false"
+  fi
+
+  # 4. PHPStan
+  if [ "$RUN_STAN" = "true" ]; then
+    run_step "$repo" "PHPStan" php_in "$QPHP" "$work" vendor/bin/phpstan analyse --no-progress --memory-limit=1G || true
+  else
+    skip_step "$repo" "PHPStan" "run-phpstan: false"
+  fi
+
+  # 5. Deptrac
+  if [ "$RUN_DEPTRAC" = "true" ]; then
+    run_step "$repo" "Deptrac" php_in "$QPHP" "$work" vendor/bin/deptrac analyse --no-progress || true
+  fi
+
+  # 6. PHPUnit (quality PHP, highest)
+  run_step "$repo" "PHPUnit (PHP $QPHP, highest)" php_in "$QPHP" "$work" vendor/bin/phpunit || true
+
+  # 7. Declared dependencies: install without require-dev, as in the CI
+  if [ "$RUN_REQ" = "true" ]; then
+    copy_repo "$dir" "$work-nodev"
+    if run_step "$repo" "composer install --no-dev" install_deps "$work-nodev" "$QPHP" --no-dev; then
+      if ensure_image "$TOOL_PHP" && run_step "$repo" "install composer-require-checker" ensure_require_checker; then
+        run_step "$repo" "composer-require-checker" \
+          php_in "$TOOL_PHP" "$work-nodev" "$TOOLS_DIR/composer-require-checker/vendor/bin/composer-require-checker" check composer.json || true
+      fi
+    fi
+  else
+    skip_step "$repo" "composer-require-checker" "run-require-checker: false"
+  fi
+
+  # 8. Full test matrix (optional)
+  if [ "$MATRIX" -eq 1 ]; then
+    for ver in $PHPS; do
+      for deps in lowest highest; do
+        [ "$ver" = "$QPHP" ] && [ "$deps" = "highest" ] && continue   # already done above
+        label="PHP $ver, $deps"
+        if ! ensure_image "$ver"; then skip_step "$repo" "PHPUnit ($label)" "image $(php_image "$ver") not found"; continue; fi
+        rm -rf "$work-matrix"; copy_repo "$dir" "$work-matrix"
+        opts=(); [ "$deps" = "lowest" ] && opts=(--prefer-lowest --prefer-stable)
+        if run_step "$repo" "composer install ($label)" install_deps "$work-matrix" "$ver" "${opts[@]+"${opts[@]}"}"; then
+          run_step "$repo" "PHPUnit ($label)" php_in "$ver" "$work-matrix" vendor/bin/phpunit || true
+        fi
+      done
+    done
+  fi
+done
+
+# --- Summary -----------------------------------------------------------------
+title "Summary"
+for repo in "${REPOS[@]}"; do
+  ko=0; okc=0; sk=0; failed=""
+  for r in "${RESULTS[@]+"${RESULTS[@]}"}"; do
+    case "$r" in
+      "$repo|"*"|ok") okc=$((okc + 1)) ;;
+      "$repo|"*"|skip") sk=$((sk + 1)) ;;
+      "$repo|"*"|ko") ko=$((ko + 1)); s="${r#"$repo|"}"; failed="$failed${failed:+, }${s%|ko}" ;;
+    esac
+  done
+  skipped=""; [ "$sk" -eq 0 ] || skipped=", $sk skipped"
+  if [ "$ko" -eq 0 ]; then ok "$repo: $okc step(s) OK$skipped"
+  else fail "$repo: $ko failure(s): $failed"; fi
+done
+if [ "$ERRORS" -gt 0 ]; then
+  info ""; info "Logs: .cache/check/logs/<repository>/"
+  exit 1
+fi
+[ "$MATRIX" -eq 1 ] || info "  (PHPUnit on PHP $QPHP only: --matrix for all the CI versions)"
+ok "Ready to push."

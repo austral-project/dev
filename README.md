@@ -13,6 +13,7 @@ The maintainer's working repository: it **contains no Austral code**. It is used
 | `bin/clone [repositories]` | Clones or updates the repositories in `bundles/` |
 | `bin/status [repositories]` | Branch, local changes, latest tag, CI status |
 | `bin/sync-standard [repositories]` | Applies the files from `standard/` (commits nothing) |
+| `bin/check [repositories] [--matrix] [--committed] [--fix]` | Runs the CI checks locally, in Docker, before pushing |
 | `bin/setup-github [repositories] [--execute]` | `4.x` as default branch, topics, protections, vulnerability reporting |
 | `bin/release <version> [--only …] [--execute]` | Checks, then tags all the repositories |
 
@@ -27,6 +28,19 @@ All the scripts that change GitHub are **dry runs by default**; `--execute` appl
 - **Constraints**: between bundles `"austral/xxx": "^4.0"`; `"php": ">=8.2"`; `"symfony/*": "^7.4"`. No `version` field in `composer.json`.
 - **CHANGELOG**: Keep a Changelog format; the `## [X.Y.Z] - YYYY-MM-DD` section is required before tagging, and becomes the text of the GitHub Release.
 - **Language**: public files (README, CHANGELOG, comments, messages) are written in English. French stays in the `*.fr.yaml` translation files.
+
+## Checking before pushing
+
+```bash
+cd bundles/tools-bundle
+../../bin/check                # composer validate, install, PHP-CS-Fixer, PHPStan, PHPUnit, composer-require-checker
+../../bin/check --fix          # applies PHP-CS-Fixer to your files, then runs the other checks
+../../bin/check --committed    # only what is committed (what will actually be pushed)
+../../bin/check --matrix       # + PHPUnit on every PHP version of the CI, lowest and highest dependencies
+bin/check                      # from dev/: every repository, in the bundles.txt order
+```
+
+The checks run on a clean copy in `.cache/check/` (your `vendor/` is not touched), with the PHP versions and the options read from the repository's `.github/workflows/ci.yml`. Images: `australproject/php:<version>` (`AUSTRAL_PHP_IMAGE_TPL`) and `composer:2`. The logs of the failing steps are in `.cache/check/logs/`.
 
 ## Releasing a version
 
