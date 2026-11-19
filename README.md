@@ -10,7 +10,8 @@ The maintainer's working repository: it **contains no Austral code**. It is used
 
 | Command | Purpose |
 |---------|---------|
-| `bin/clone [repositories]` | Clones or updates the repositories in `bundles/` |
+| `bin/clone [repositories]` | Clones the missing repositories in `bundles/` and fetches the others (does not move your branches) |
+| `bin/pull [repositories]` | Fetches, then fast-forwards the current branch of each repository. Never merges nor rebases: a diverged repository or local changes in the way are reported and left as they are |
 | `bin/status [repositories]` | Branch, local changes, latest tag, CI status |
 | `bin/sync-standard [repositories]` | Applies the files from `standard/` (commits nothing) |
 | `bin/check [repositories] [--matrix] [--committed] [--fix]` | Runs the CI checks locally, in Docker, before pushing |
@@ -47,7 +48,7 @@ The checks run on a clean copy in `.cache/check/` (your `vendor/` is not touched
 ## Releasing a version
 
 ```bash
-bin/clone                      # everything is up to date
+bin/clone && bin/pull          # everything is up to date
 # In each repository: rename [Unreleased] to [4.1.0] - 2026-12-01, commit, push, green CI
 bin/release 4.1.0              # dry run: lists all the problems, tags nothing
 bin/release 4.1.0 --execute    # asks you to type v4.1.0, then tags and pushes
