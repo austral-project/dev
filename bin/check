@@ -250,8 +250,10 @@ for repo in "${REPOS[@]}"; do
     copy_repo "$dir" "$work-nodev"
     if run_step "$repo" "composer install --no-dev" install_deps "$work-nodev" "$QPHP" --no-dev; then
       if ensure_image "$TOOL_PHP" && run_step "$repo" "install composer-require-checker" ensure_require_checker; then
+        req_opts=()
+        [ -f "$work-nodev/composer-require-checker.json" ] && req_opts=(--config-file=composer-require-checker.json)
         run_step "$repo" "composer-require-checker" \
-          php_in "$TOOL_PHP" "$work-nodev" "$TOOLS_DIR/composer-require-checker/vendor/bin/composer-require-checker" check composer.json || true
+          php_in "$TOOL_PHP" "$work-nodev" "$TOOLS_DIR/composer-require-checker/vendor/bin/composer-require-checker" check "${req_opts[@]+"${req_opts[@]}"}" composer.json || true
       fi
     fi
   else
