@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Updates the cloned repositories from GitHub: fetch, then fast-forward of the current branch.
+# Never merges, never rebases and never touches local changes: a repository that cannot be
+# fast-forwarded is reported and left as it is.
+#   bin/pull [repositories]
+source "$(dirname "$0")/lib.sh"
+require_cmd git
+validate_selection "$@"
+
+errors=0
+for repo in $(select_repos "$@"); do
+  dir="$(repo_dir "$repo")"
+  if [ ! -d "$dir/.git" ]; then
+    warn "$repo: not cloned (run bin/clone)"
+    continue
+  fi
+  if ! git -C "$dir" fetch --quiet --tags --prune origin; then
+    fail "$repo: fetch failed"
+    errors=$((errors + 1))
+    continue
+  fi
+  branch="$(git -C "$dir" branch --show-current)"
+  if [ -z "$branch" ] || ! git -C "$dir" rev-parse --verify --quiet "@{u}" >/dev/null; then
+    warn "$repo: no upstream branch (${branch:-detached HEAD}), skipped"
+    continue
+  fi
+  read -r ahead behind < <(git -C "$dir" rev-list --left-right --count "HEAD...@{u}")
+  if [ "$behind" -eq 0 ]; then
+    if [ "$ahead" -gt 0 ]; then
+      warn "$repo: up to date, $ahead local commit(s) not pushed ($branch)"
+    else
+      ok "$repo: up to date ($branch)"
+    fi
+    continue
+  fi
+  if [ "$ahead" -gt 0 ]; then
+    fail "$repo: diverged from origin/$branch (+$ahead/-$behind), to resolve by hand"
+    errors=$((errors + 1))
+    continue
+  fi
+  if git -C "$dir" merge --ff-only --quiet "@{u}"; then
+    ok "$repo: $behind commit(s) pulled ($branch)"
+  else
+    fail "$repo: fast-forward refused (local changes in the way?)"
+    errors=$((errors + 1))
+  fi
+done
+
+[ "$errors" -eq 0 ] || die "$errors repository(ies) not updated"
