@@ -26,6 +26,7 @@ security-bundle          bundle
 admin-bundle             bundle
 # Layer 4 — Features
 seo-bundle               bundle
+domain-bundle            bundle
 content-block-bundle     bundle
 graphic-items-bundle     bundle
 social-network-bundle    bundle
