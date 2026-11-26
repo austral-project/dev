@@ -17,6 +17,7 @@ entity-translate-bundle  bundle
 http-bundle              bundle
 elastic-search-bundle    bundle
 cache-bundle             bundle
+log-bundle               bundle
 # Layer 3 — Back office
 form-bundle              bundle
 list-bundle              bundle
