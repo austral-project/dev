@@ -40,3 +40,5 @@ skeleton                 project   # replaces sandbox
 # Organization and tooling (master branch, not versioned)
 .github                  tooling
 dev                      tooling
+# Symfony Flex recipes (master: sources, flex/master: generated)
+recipes                  tooling
