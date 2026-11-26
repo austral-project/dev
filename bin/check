@@ -63,6 +63,7 @@ case "$WORKSPACE/" in "$DEV_ROOT"/*) ;; *) MOUNTS+=(-v "$WORKSPACE:$WORKSPACE") 
 docker_in() {
   local image="$1" wd="$2" entry="$3"; shift 3
   docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
+    -e COMPOSER_ROOT_VERSION=4.x-dev \
     -e COMPOSER_HOME="$COMPOSER_HOME_DIR" -e COMPOSER_CACHE_DIR="$COMPOSER_HOME_DIR/cache" \
     "${MOUNTS[@]}" -w "$wd" --entrypoint "$entry" "$image" "$@" </dev/null
 }
